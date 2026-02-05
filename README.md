@@ -42,7 +42,7 @@ public/
 
 1. **Navigate to the project directory:**
    ```bash
-   cd /Users/ruan/Docs/RevisionApp
+   cd /Users/XXXXX/Docs/RevisionApp
    ```
 
 2. **Install dependencies:**
