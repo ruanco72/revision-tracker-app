@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# Next.js build output
+.next/
+
+# logs
+*.log
+
+# environment variables
+.env
+.env.local
+.env.*.local
+
+# private config (not committed)
+src/config/private.ts
+
+# OS junk
+.DS_Store
