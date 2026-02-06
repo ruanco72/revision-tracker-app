@@ -1,34 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { useAuth } from '@/lib/auth';
 
 export function StreakBadge({ userId }: { userId?: string | null }) {
+  const { profile } = useAuth();
   const [streak, setStreak] = useState<number>(0);
 
   useEffect(() => {
-    if (!userId) return;
+    if (profile && profile.current_streak !== undefined) {
+      setStreak(profile.current_streak ?? 0);
+      return;
+    }
 
-    let mounted = true;
-    (async () => {
-      try {
-        const { data, error } = await supabase
-          .from("user_profiles")
-          .select("current_streak")
-          .eq("user_id", userId)
-          .single();
-
-        if (error) throw error;
-        if (mounted) setStreak(data?.current_streak ?? 0);
-      } catch (err) {
-        // silently ignore — non-blocking UI element
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, [userId]);
+    // fallback: if userId provided, set to 0 (profile should exist via auth)
+    if (userId) setStreak(0);
+  }, [profile, userId]);
 
   const hasStreak = (streak ?? 0) > 0;
 

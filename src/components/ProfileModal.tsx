@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from '@/lib/auth';
 
 export function ProfileModal({
   userId,
@@ -13,6 +14,7 @@ export function ProfileModal({
   const [displayName, setDisplayName] = useState<string>("");
   const [avatar, setAvatar] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const { refreshProfile } = useAuth();
 
   useEffect(() => {
     if (!userId) return;
@@ -49,6 +51,8 @@ export function ProfileModal({
 
       const { error } = await supabase.from("user_profiles").upsert(payload);
       if (error) throw error;
+      // refresh auth profile state so UI updates immediately
+      await refreshProfile();
       onClose();
     } catch (err) {
       console.error(err);

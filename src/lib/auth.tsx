@@ -10,9 +10,20 @@ import { useState, useEffect, useContext, createContext, ReactNode } from 'react
 import { User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 
+type UserProfile = {
+  user_id: string;
+  email?: string;
+  display_name?: string | null;
+  avatar?: string | null;
+  current_streak?: number;
+  longest_streak?: number;
+};
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  profile: UserProfile | null;
+  refreshProfile: () => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -23,6 +34,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
 
   // Check if user is already logged in on mount
   useEffect(() => {
@@ -32,6 +44,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } = await supabase.auth.getUser();
       setUser(user ?? null);
       setLoading(false);
+      if (user) {
+        // load profile
+        try {
+          const { data } = await supabase
+            .from('user_profiles')
+            .select('user_id, email, display_name, avatar, current_streak, longest_streak')
+            .eq('user_id', user.id)
+            .single();
+          setProfile(data ?? null);
+        } catch (e) {
+          setProfile(null);
+        }
+      }
     };
 
     checkUser();
@@ -39,8 +64,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user ?? null);
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const u = session?.user ?? null;
+      setUser(u);
+      if (u) {
+        try {
+          const { data } = await supabase
+            .from('user_profiles')
+            .select('user_id, email, display_name, avatar, current_streak, longest_streak')
+            .eq('user_id', u.id)
+            .single();
+          setProfile(data ?? null);
+        } catch (e) {
+          setProfile(null);
+        }
+      } else {
+        setProfile(null);
+      }
     });
 
     return () => subscription?.unsubscribe();
@@ -64,6 +104,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           current_streak: 0,
           longest_streak: 0,
         });
+        // refresh profile in memory
+        try {
+          const { data: p } = await supabase
+            .from('user_profiles')
+            .select('user_id, email, display_name, avatar, current_streak, longest_streak')
+            .eq('user_id', user.id)
+            .single();
+          setProfile(p ?? null);
+        } catch (e) {
+          // ignore
+        }
       }
     } catch (err) {
       // Non-fatal: profile creation failure shouldn't block sign-up flow.
@@ -84,8 +135,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   };
 
+  const refreshProfile = async () => {
+    if (!user) return;
+    try {
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('user_id, email, display_name, avatar, current_streak, longest_streak')
+        .eq('user_id', user.id)
+        .single();
+      setProfile(data ?? null);
+    } catch (e) {
+      // ignore
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, signUp, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, loading, profile, refreshProfile, signUp, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );

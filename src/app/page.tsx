@@ -242,7 +242,7 @@ function SessionList({ sessions }: { sessions: Session[] }) {
 // MAIN PAGE COMPONENT
 // ============================================================================
 export default function Home() {
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading, signOut, profile } = useAuth();
 
   const [timerState, setTimerState] = useState<TimerState>({
     isRunning: false,
@@ -426,8 +426,8 @@ export default function Home() {
             <StreakBadge userId={user?.id} />
           </div>
 
-          <div className="flex justify-center">
-            <h1 className="text-3xl sm:text-4xl font-bold text-white">Tracker</h1>
+          <div className="flex justify-center" aria-hidden>
+            {/* center column intentionally left blank to keep title removed */}
           </div>
 
           <div className="flex items-center justify-end">
@@ -436,7 +436,13 @@ export default function Home() {
               className="flex items-center gap-2 text-sm text-purple-300 hover:text-purple-100 transition px-3 py-2"
               aria-label="Open profile"
             >
-              Profile
+              <div className="w-8 h-8 rounded-full bg-purple-800/30 flex items-center justify-center text-lg">
+                {profile?.avatar ? (
+                  <span aria-hidden>{profile.avatar}</span>
+                ) : (
+                  <span className="text-amber-300">{profile?.email?.[0]?.toUpperCase() ?? 'U'}</span>
+                )}
+              </div>
             </button>
           </div>
         </div>

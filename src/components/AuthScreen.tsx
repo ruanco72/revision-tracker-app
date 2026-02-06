@@ -26,9 +26,8 @@ export function AuthScreen() {
 
     try {
       if (isSignUp) {
-        // Load private signup code from uncommitted config
-        const mod = await import('@/config/private').catch(() => null);
-        const SIGNUP_CODE = mod?.SIGNUP_CODE;
+        // Validate signup code against env var
+        const SIGNUP_CODE = process.env.NEXT_PUBLIC_SIGNUP_VALIDATION_CODE;
 
         if (!SIGNUP_CODE) {
           setError('Sign-up is not available: validation not configured.');
