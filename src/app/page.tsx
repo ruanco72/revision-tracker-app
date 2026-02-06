@@ -261,6 +261,21 @@ export default function Home() {
   const [isSaving, setIsSaving] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
 
+  // Dev-only: Log mount for debugging hydration issues
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(
+        `%c[App Mounted] ${timestamp}`,
+        'color: #10b981; font-weight: bold;'
+      );
+      return () => {
+        const endTime = new Date().toLocaleTimeString();
+        console.log(`%c[App Unmounted] ${endTime}`, 'color: #ef4444;');
+      };
+    }
+  }, []);
+
   // Timer effect
   useEffect(() => {
     let interval: NodeJS.Timeout;

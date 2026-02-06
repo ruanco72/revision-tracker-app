@@ -39,23 +39,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Check if user is already logged in on mount
   useEffect(() => {
     const checkUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      setUser(user ?? null);
-      setLoading(false);
-      if (user) {
-        // load profile
-        try {
-          const { data } = await supabase
-            .from('user_profiles')
-            .select('user_id, email, display_name, avatar, current_streak, longest_streak')
-            .eq('user_id', user.id)
-            .single();
-          setProfile(data ?? null);
-        } catch (e) {
-          setProfile(null);
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        setUser(user ?? null);
+        setLoading(false);
+        if (user) {
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[Auth] User loaded:', user.email);
+          }
+          // load profile
+          try {
+            const { data } = await supabase
+              .from('user_profiles')
+              .select('user_id, email, display_name, avatar, current_streak, longest_streak')
+              .eq('user_id', user.id)
+              .single();
+            setProfile(data ?? null);
+          } catch (e) {
+            console.warn('[Auth] Failed to load profile:', e);
+            setProfile(null);
+          }
         }
+      } catch (err) {
+        console.error('[Auth] Failed to check user:', err);
+        setLoading(false);
       }
     };
 
@@ -66,6 +75,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
       const u = session?.user ?? null;
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[Auth] Auth state changed:', event, u?.email);
+      }
       setUser(u);
       if (u) {
         try {
@@ -76,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .single();
           setProfile(data ?? null);
         } catch (e) {
+          console.warn('[Auth] Failed to load profile on auth change:', e);
           setProfile(null);
         }
       } else {

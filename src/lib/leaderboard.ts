@@ -83,13 +83,17 @@ export async function getLeaderboard(): Promise<LeaderboardEntry[]> {
     const leaderboard: LeaderboardEntry[] = Array.from(userStats.entries())
       .map(([userId, stats]: any) => {
         const profile = profiles?.find((p: any) => p.user_id === userId);
+        const email = profile?.email ?? 'Unknown';
+        // Fallback: use email prefix if no display_name, or avatar emoji if none set
+        const displayName = profile?.display_name ?? stats.displayName ?? email.split('@')[0] ?? null;
+        const avatar = profile?.avatar ?? stats.avatar ?? '🔥';
         return {
           userId,
-          userEmail: profile?.email ?? 'Unknown',
+          userEmail: email,
           weeklyMinutes: stats.totalMinutes,
           currentStreak: stats.currentStreak,
-          displayName: profile?.display_name ?? stats.displayName ?? null,
-          avatar: profile?.avatar ?? stats.avatar ?? null,
+          displayName,
+          avatar,
         } as LeaderboardEntry;
       })
       .sort((a, b) => b.weeklyMinutes - a.weeklyMinutes)
@@ -106,13 +110,17 @@ export async function getLeaderboard(): Promise<LeaderboardEntry[]> {
   const leaderboard: LeaderboardEntry[] = Array.from(userStats.entries())
     .map(([userId, stats]: any) => {
       const user = users?.users?.find((u: any) => u.id === userId);
+      const email = user?.email ?? 'Unknown';
+      // Fallback: use email prefix if no display_name, or avatar emoji if none set
+      const displayName = stats.displayName ?? email.split('@')[0] ?? null;
+      const avatar = stats.avatar ?? '🔥';
       return {
         userId,
-        userEmail: user?.email ?? 'Unknown',
+        userEmail: email,
         weeklyMinutes: stats.totalMinutes,
         currentStreak: stats.currentStreak,
-        displayName: stats.displayName ?? null,
-        avatar: stats.avatar ?? null,
+        displayName,
+        avatar,
       } as LeaderboardEntry;
     })
     .sort((a, b) => b.weeklyMinutes - a.weeklyMinutes)

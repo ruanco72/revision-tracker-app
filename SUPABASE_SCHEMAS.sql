@@ -6,11 +6,13 @@
 
 -- ============================================================================
 -- TABLE: user_profiles
--- Purpose: Store user profile data including streaks
+-- Purpose: Store user profile data including streaks and profile customization
 -- ============================================================================
 CREATE TABLE public.user_profiles (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT NOT NULL,
+  display_name TEXT,
+  avatar TEXT,
   current_streak INTEGER DEFAULT 0,
   longest_streak INTEGER DEFAULT 0,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -104,3 +106,20 @@ CREATE TRIGGER on_auth_user_created
 AFTER INSERT ON auth.users
 FOR EACH ROW
 EXECUTE FUNCTION public.create_user_profile();
+
+-- ============================================================================
+-- TRIGGER: Update updated_at timestamp on profile changes
+-- Purpose: Automatically update the updated_at column when user_profiles is modified
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.update_user_profiles_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_user_profiles_updated_at
+BEFORE UPDATE ON public.user_profiles
+FOR EACH ROW
+EXECUTE FUNCTION public.update_user_profiles_timestamp();
