@@ -1,9 +1,10 @@
-'use client';
+"use client";
 
 // Timer component that manages session timing
-// Displays time in MM:SS format and handles start/stop logic
+// Uses timestamps for accurate elapsed time and attempts to hold a wake lock
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useWakeLock } from '../hooks/useWakeLock';
 
 interface TimerProps {
   isRunning: boolean;
@@ -12,18 +13,39 @@ interface TimerProps {
 
 export function Timer({ isRunning, onStop }: TimerProps) {
   const [seconds, setSeconds] = useState(0);
+  // store start time in a ref so it survives re-renders without causing effects
+  const startTimeRef = useRef<number | null>(null);
 
-  // Update timer every second when running
+  // Try to keep the screen awake while running
+  useWakeLock(isRunning);
+
+  // Update displayed seconds based on timestamps (no drift)
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let id: number | undefined;
+
+    const update = () => {
+      const start = startTimeRef.current;
+      if (!start) return;
+      const elapsedMs = Date.now() - start;
+      setSeconds(Math.floor(elapsedMs / 1000));
+    };
 
     if (isRunning) {
-      interval = setInterval(() => {
-        setSeconds((prev) => prev + 1);
-      }, 1000);
+      // initialize start time if missing
+      if (!startTimeRef.current) startTimeRef.current = Date.now();
+
+      // update immediately and then every second
+      update();
+      id = window.setInterval(update, 1000);
+    } else {
+      // when stopped externally, reset local state
+      setSeconds(0);
+      startTimeRef.current = null;
     }
 
-    return () => clearInterval(interval);
+    return () => {
+      if (id !== undefined) window.clearInterval(id);
+    };
   }, [isRunning]);
 
   // Format seconds to MM:SS display
@@ -35,11 +57,15 @@ export function Timer({ isRunning, onStop }: TimerProps) {
       .padStart(2, '0')}`;
   };
 
-  // Handle stop - calculate minutes and pass to parent
+  // Handle stop - compute duration from timestamps so it's accurate
   const handleStop = () => {
-    const minutes = Math.round(seconds / 60);
+    const start = startTimeRef.current;
+    const durationSeconds = start ? Math.floor((Date.now() - start) / 1000) : seconds;
+    const minutes = Math.round(durationSeconds / 60);
     onStop(minutes);
+    // reset local state
     setSeconds(0);
+    startTimeRef.current = null;
   };
 
   return (

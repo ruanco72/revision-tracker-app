@@ -27,7 +27,8 @@ import { AuthScreen } from '@/components/AuthScreen';
 import { Leaderboard } from '@/components/Leaderboard';
 import { StreakBadge } from '@/components/StreakBadge';
 import { ProfileModal } from '@/components/ProfileModal';
-import { saveSession, getTodayTotalMinutes, getWeeklySessionCount } from '@/lib/sessions';
+import { saveSession, getTodayTotalMinutes, getWeeklySessionCount, SaveSessionParams } from '@/lib/sessions';
+import { withTimeout } from '@/lib/withTimeout';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 
 // Configuration
@@ -167,10 +168,12 @@ function SessionCTA({
   isRunning,
   onStart,
   onStop,
+  isSaving,
 }: {
   isRunning: boolean;
   onStart: () => void;
   onStop: () => void;
+  isSaving?: boolean;
 }) {
   return (
     <div className="space-y-3">
@@ -186,9 +189,10 @@ function SessionCTA({
         <button
           onClick={onStop}
           aria-label="Stop the current study session"
-          className="w-full px-8 py-5 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700 text-white font-bold text-lg rounded-2xl shadow-2xl transition-all duration-200 active:scale-95 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 focus:ring-offset-gray-900"
+          disabled={isSaving}
+          className={`w-full px-8 py-5 bg-gradient-to-r from-red-500 to-pink-600 hover:from-red-600 hover:to-pink-700 text-white font-bold text-lg rounded-2xl shadow-2xl transition-all duration-200 active:scale-95 focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2 focus:ring-offset-gray-900 ${isSaving ? 'opacity-60 cursor-not-allowed' : ''}`}
         >
-          Stop Session
+          {isSaving ? 'Saving...' : 'Stop Session'}
         </button>
       )}
     </div>
@@ -259,6 +263,9 @@ export default function Home() {
   const [todayMinutes, setTodayMinutes] = useState(0);
   const [weeklyCount, setWeeklyCount] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
+  const [pendingSave, setPendingSave] = useState<SaveSessionParams | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [sessionStart, setSessionStart] = useState<number | null>(null);
   const [showProfile, setShowProfile] = useState(false);
 
   // Dev-only: Log mount for debugging hydration issues
@@ -324,12 +331,46 @@ export default function Home() {
       .padStart(2, '0')}`;
   };
 
+  // Retry saving a pending session (used when previous save failed or timed out)
+  const retrySave = async () => {
+    if (!pendingSave) return;
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      await withTimeout(saveSession(pendingSave), 10000);
+
+      // Update local stats on successful retry
+      setTodayMinutes((prev) => prev + pendingSave.durationMin);
+      setWeeklyCount((prev) => prev + 1);
+
+      // Persist local fallback too
+      const newSession: Session = {
+        id: `session-${Date.now()}`,
+        start: pendingSave.startTime?.getTime() ?? Date.now(),
+        durationMin: pendingSave.durationMin,
+      };
+      setSessions((prev) => [...prev, newSession]);
+
+      setPendingSave(null);
+    } catch (err: any) {
+      console.error('Retry save failed:', err);
+      const msg = err?.message?.includes('timed out') ? 'Save timed out. Please try again.' : 'Failed to save session. Please try again.';
+      setSaveError(msg);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // Session progress (0-100) based on DEFAULT_SESSION_LENGTH
   const sessionProgress =
     (timerState.seconds / (DEFAULT_SESSION_LENGTH * 60)) * 100;
 
   // Handle start session
   const handleStart = () => {
+    const now = Date.now();
+    setSessionStart(now);
     setTimerState({
       isRunning: true,
       seconds: 0,
@@ -338,7 +379,11 @@ export default function Home() {
 
   // Handle stop session
   const handleStop = async () => {
-    const durationMin = timerState.seconds / 60;
+    // Compute duration from timestamp if available to avoid drift/background issues
+    const startMs = sessionStart ?? null;
+    const now = Date.now();
+    const elapsedSeconds = startMs ? Math.floor((now - startMs) / 1000) : timerState.seconds;
+    const durationMin = elapsedSeconds / 60;
 
     // Enforce minimum session length (10 minutes)
     if (durationMin < 10) {
@@ -346,47 +391,51 @@ export default function Home() {
       setTimeout(() => setShortSessionMsg(false), 3000);
 
       // Reset timer but don't save session
-      setTimerState({
-        isRunning: false,
-        seconds: 0,
-      });
+      setTimerState({ isRunning: false, seconds: 0 });
+      setSessionStart(null);
       return;
     }
 
+    // Optimistic stop: immediately update UI to stopped state
+    setTimerState({ isRunning: false, seconds: 0 });
+    setSessionStart(null);
+
+    // Prepare save payload so retries can use it
+    const savePayload: SaveSessionParams = {
+      userId: user?.id ?? '',
+      durationMin,
+      startTime: startMs ? new Date(startMs) : new Date(),
+    };
+
     setIsSaving(true);
+    setSaveError(null);
+    setPendingSave(savePayload);
 
     try {
       if (user) {
-        // Save to Supabase
-        await saveSession({
-          userId: user.id,
-          durationMin,
-        });
+        // Wrap the save call with a timeout (10s)
+        await withTimeout(saveSession(savePayload), 10000);
 
-        // Update local stats
+        // Update local stats only after successful save
         setTodayMinutes((prev) => prev + durationMin);
         setWeeklyCount((prev) => prev + 1);
+
+        // Clear pending save on success
+        setPendingSave(null);
       }
 
-      // Also save to localStorage as fallback
+      // Always persist locally as a fallback
       const newSession: Session = {
         id: `session-${Date.now()}`,
-        start: Date.now(),
+        start: savePayload.startTime?.getTime() ?? Date.now(),
         durationMin,
       };
       setSessions((prev) => [...prev, newSession]);
-
-      setTimerState({
-        isRunning: false,
-        seconds: 0,
-      });
-    } catch (err) {
+    } catch (err: any) {
+      // Log the real error and show a friendly message, don't block UI
       console.error('Failed to save session:', err);
-      // Still reset timer even if save fails
-      setTimerState({
-        isRunning: false,
-        seconds: 0,
-      });
+      const msg = err?.message?.includes('timed out') ? 'Save timed out. Please try again.' : 'Failed to save session. Please try again.';
+      setSaveError(msg);
     } finally {
       setIsSaving(false);
     }
@@ -494,6 +543,7 @@ export default function Home() {
               isRunning={timerState.isRunning}
               onStart={handleStart}
               onStop={handleStop}
+              isSaving={isSaving}
             />
             {shortSessionMsg && (
               <div className="mt-3 text-center text-sm text-orange-300">
@@ -503,6 +553,25 @@ export default function Home() {
             {isSaving && (
               <div className="mt-3 text-center text-sm text-blue-300">
                 Saving session...
+              </div>
+            )}
+            {saveError && (
+              <div className="mt-3 text-center text-sm text-red-300">
+                <p>{saveError}</p>
+                <div className="flex items-center justify-center gap-3 mt-2">
+                  <button
+                    onClick={retrySave}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full text-sm"
+                  >
+                    Retry Save
+                  </button>
+                  <button
+                    onClick={() => setSaveError(null)}
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-full text-sm"
+                  >
+                    Dismiss
+                  </button>
+                </div>
               </div>
             )}
           </div>
