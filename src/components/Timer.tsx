@@ -1,52 +1,59 @@
 "use client";
 
-// Timer component that manages session timing
-// Uses timestamps for accurate elapsed time and attempts to hold a wake lock
+/**
+ * Timer Component - Crash-Proof Session Timing
+ * 
+ * Uses timestamp-based calculations for elapsed time. The source of truth is:
+ * elapsedSeconds = (Date.now() - startMs - pausedMs) / 1000
+ * 
+ * This survives app suspension, phone lock, and background kills because
+ * it recalculates from absolute timestamps, not accumulated seconds.
+ */
 
 import { useEffect, useRef, useState } from 'react';
 import { useWakeLock } from '../hooks/useWakeLock';
+import { ActiveSession, getElapsedSeconds } from '@/lib/activeSession';
 
 interface TimerProps {
   isRunning: boolean;
-  onStop: (minutes: number) => void;
+  onStop: (seconds: number) => void;
+  activeSession: ActiveSession | null;
 }
 
-export function Timer({ isRunning, onStop }: TimerProps) {
+export function Timer({ isRunning, onStop, activeSession }: TimerProps) {
   const [seconds, setSeconds] = useState(0);
-  // store start time in a ref so it survives re-renders without causing effects
-  const startTimeRef = useRef<number | null>(null);
+  const intervalRef = useRef<number | undefined>();
 
   // Try to keep the screen awake while running
   useWakeLock(isRunning);
 
   // Update displayed seconds based on timestamps (no drift)
   useEffect(() => {
-    let id: number | undefined;
-
     const update = () => {
-      const start = startTimeRef.current;
-      if (!start) return;
-      const elapsedMs = Date.now() - start;
-      setSeconds(Math.floor(elapsedMs / 1000));
+      const elapsed = getElapsedSeconds(activeSession);
+      setSeconds(elapsed);
     };
 
-    if (isRunning) {
-      // initialize start time if missing
-      if (!startTimeRef.current) startTimeRef.current = Date.now();
-
-      // update immediately and then every second
+    if (isRunning && activeSession) {
+      // Update immediately and then every second
       update();
-      id = window.setInterval(update, 1000);
+      intervalRef.current = window.setInterval(update, 1000);
     } else {
-      // when stopped externally, reset local state
+      // When stopped, reset display
       setSeconds(0);
-      startTimeRef.current = null;
+      if (intervalRef.current) {
+        window.clearInterval(intervalRef.current);
+        intervalRef.current = undefined;
+      }
     }
 
     return () => {
-      if (id !== undefined) window.clearInterval(id);
+      if (intervalRef.current) {
+        window.clearInterval(intervalRef.current);
+        intervalRef.current = undefined;
+      }
     };
-  }, [isRunning]);
+  }, [isRunning, activeSession]);
 
   // Format seconds to MM:SS display
   const formatTime = (totalSeconds: number) => {
@@ -57,15 +64,10 @@ export function Timer({ isRunning, onStop }: TimerProps) {
       .padStart(2, '0')}`;
   };
 
-  // Handle stop - compute duration from timestamps so it's accurate
+  // Handle stop - compute duration from timestamps via active session
   const handleStop = () => {
-    const start = startTimeRef.current;
-    const durationSeconds = start ? Math.floor((Date.now() - start) / 1000) : seconds;
-    const minutes = Math.round(durationSeconds / 60);
-    onStop(minutes);
-    // reset local state
-    setSeconds(0);
-    startTimeRef.current = null;
+    const durationSeconds = getElapsedSeconds(activeSession);
+    onStop(durationSeconds);
   };
 
   return (

@@ -30,11 +30,14 @@ import { ProfileModal } from '@/components/ProfileModal';
 import { saveSession, getTodayTotalMinutes, getWeeklySessionCount, SaveSessionParams } from '@/lib/sessions';
 import { withTimeout } from '@/lib/withTimeout';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { ActiveSession, saveActiveSession, loadActiveSession, clearActiveSession, getElapsedSeconds } from '@/lib/activeSession';
 
 // Configuration
 const DEFAULT_SESSION_LENGTH = 25; // minutes
 const DAILY_GOAL = 60; // minutes
 const WEEKLY_DAYS = 7;
+const MIN_SESSION_LENGTH = 10; // minutes - enforce minimum before saving
+const MAX_SESSION_HOURS = 8; // if session > 8 hours, warn user (overnight detection)
 
 // Types
 interface Session {
@@ -260,12 +263,13 @@ export default function Home() {
 
   const [isLoaded, setIsLoaded] = useState(false);
   const [shortSessionMsg, setShortSessionMsg] = useState(false);
+  const [tooLongSessionWarning, setTooLongSessionWarning] = useState(false);
   const [todayMinutes, setTodayMinutes] = useState(0);
   const [weeklyCount, setWeeklyCount] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingSave, setPendingSave] = useState<SaveSessionParams | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [sessionStart, setSessionStart] = useState<number | null>(null);
+  const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
   const [showProfile, setShowProfile] = useState(false);
 
   // Dev-only: Log mount for debugging hydration issues
@@ -283,21 +287,17 @@ export default function Home() {
     }
   }, []);
 
-  // Timer effect
+  // Recover running session on app load (phone unlock, tab switch, app restart)
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    if (typeof window === 'undefined') return;
 
-    if (timerState.isRunning) {
-      interval = setInterval(() => {
-        setTimerState((prev) => ({
-          ...prev,
-          seconds: prev.seconds + 1,
-        }));
-      }, 1000);
+    const recovered = loadActiveSession();
+    if (recovered) {
+      console.log('[Session Recovery] Found running session in localStorage, restoring...');
+      setActiveSession(recovered);
+      setTimerState({ isRunning: true, seconds: 0 });
     }
-
-    return () => clearInterval(interval);
-  }, [timerState.isRunning]);
+  }, []);
 
   // Load data when user is authenticated
   useEffect(() => {
@@ -321,6 +321,18 @@ export default function Home() {
       }
     }
   }, [authLoading, user]);
+
+  // Periodically update active session in localStorage while timer is running
+  // This ensures that if the app crashes, we have the latest state
+  useEffect(() => {
+    if (!activeSession || !timerState.isRunning) return;
+
+    const persistInterval = setInterval(() => {
+      saveActiveSession(activeSession);
+    }, 5000); // Save every 5 seconds
+
+    return () => clearInterval(persistInterval);
+  }, [activeSession, timerState.isRunning]);
 
   // Format timer display (MM:SS)
   const formatTime = (totalSeconds: number) => {
@@ -364,13 +376,23 @@ export default function Home() {
   };
 
   // Session progress (0-100) based on DEFAULT_SESSION_LENGTH
+  const elapsedSeconds = activeSession ? getElapsedSeconds(activeSession) : timerState.seconds;
   const sessionProgress =
-    (timerState.seconds / (DEFAULT_SESSION_LENGTH * 60)) * 100;
+    (elapsedSeconds / (DEFAULT_SESSION_LENGTH * 60)) * 100;
 
   // Handle start session
   const handleStart = () => {
-    const now = Date.now();
-    setSessionStart(now);
+    // Create new active session
+    const newSession: ActiveSession = {
+      running: true,
+      startMs: Date.now(),
+      pausedMs: 0,
+      goalMinutes: DEFAULT_SESSION_LENGTH,
+    };
+
+    // Persist immediately
+    saveActiveSession(newSession);
+    setActiveSession(newSession);
     setTimerState({
       isRunning: true,
       seconds: 0,
@@ -379,32 +401,37 @@ export default function Home() {
 
   // Handle stop session
   const handleStop = async () => {
-    // Compute duration from timestamp if available to avoid drift/background issues
-    const startMs = sessionStart ?? null;
-    const now = Date.now();
-    const elapsedSeconds = startMs ? Math.floor((now - startMs) / 1000) : timerState.seconds;
-    const durationMin = elapsedSeconds / 60;
+    // Compute final duration from active session timestamps (source of truth)
+    const durationSeconds = activeSession ? getElapsedSeconds(activeSession) : elapsedSeconds;
+    const durationMin = durationSeconds / 60;
 
-    // Enforce minimum session length (10 minutes)
-    if (durationMin < 10) {
+    // Edge case 1: enforce minimum session length (10 minutes)
+    if (durationMin < MIN_SESSION_LENGTH) {
       setShortSessionMsg(true);
       setTimeout(() => setShortSessionMsg(false), 3000);
 
-      // Reset timer but don't save session
+      // Reset timer but don't save session; clear from localStorage
       setTimerState({ isRunning: false, seconds: 0 });
-      setSessionStart(null);
+      clearActiveSession();
+      setActiveSession(null);
       return;
+    }
+
+    // Edge case 2: warn if session is "too long" (overnight detection)
+    if (durationSeconds > MAX_SESSION_HOURS * 3600) {
+      setTooLongSessionWarning(true);
+      // Log for debugging
+      console.warn(`[Session] Unusually long session detected: ${(durationSeconds / 3600).toFixed(1)} hours`);
     }
 
     // Optimistic stop: immediately update UI to stopped state
     setTimerState({ isRunning: false, seconds: 0 });
-    setSessionStart(null);
 
     // Prepare save payload so retries can use it
     const savePayload: SaveSessionParams = {
       userId: user?.id ?? '',
       durationMin,
-      startTime: startMs ? new Date(startMs) : new Date(),
+      startTime: activeSession ? new Date(activeSession.startMs) : new Date(),
     };
 
     setIsSaving(true);
@@ -427,7 +454,7 @@ export default function Home() {
       // Always persist locally as a fallback
       const newSession: Session = {
         id: `session-${Date.now()}`,
-        start: savePayload.startTime?.getTime() ?? Date.now(),
+        start: activeSession?.startMs ?? Date.now(),
         durationMin,
       };
       setSessions((prev) => [...prev, newSession]);
@@ -437,6 +464,10 @@ export default function Home() {
       const msg = err?.message?.includes('timed out') ? 'Save timed out. Please try again.' : 'Failed to save session. Please try again.';
       setSaveError(msg);
     } finally {
+      // CRITICAL: Clear active session from localStorage even if save fails
+      // This ensures we don't try to recover a session we just stopped
+      clearActiveSession();
+      setActiveSession(null);
       setIsSaving(false);
     }
   };
@@ -519,7 +550,7 @@ export default function Home() {
           <div className="relative w-full flex justify-center py-4">
             <ProgressRing
               progress={sessionProgress}
-              timeLabel={formatTime(timerState.seconds)}
+              timeLabel={formatTime(elapsedSeconds)}
             />
           </div>
 
@@ -547,7 +578,12 @@ export default function Home() {
             />
             {shortSessionMsg && (
               <div className="mt-3 text-center text-sm text-orange-300">
-                Session too short to count (minimum 10 minutes)
+                Session too short to count (minimum {MIN_SESSION_LENGTH} minutes)
+              </div>
+            )}
+            {tooLongSessionWarning && (
+              <div className="mt-3 text-center text-sm text-yellow-300">
+                ⚠️ Very long session detected. Make sure this is correct!
               </div>
             )}
             {isSaving && (
